@@ -1,0 +1,13 @@
+{
+	"required": true,
+	"package": "dev.ianaduarte.barometry.mixin",
+	"compatibilityLevel": "JAVA_21",
+	"mixins": [
+	],
+	"client": [
+		"GameRendererMixin",
+		"LevelRendererMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1}
+}

@@ -1,0 +1,6 @@
+{
+    "pack": {
+        "description": "re-patches minecraft's cloud shader if you need to place the mod resources pack below the vanilla pack",
+        "pack_format": 34
+    }
+}
