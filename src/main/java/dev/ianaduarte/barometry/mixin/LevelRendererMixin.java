@@ -14,7 +14,6 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Matrix4f;
-import org.joml.Vector3f;
 import org.joml.Vector4f;
 import org.spongepowered.asm.mixin.*;
 import org.spongepowered.asm.mixin.injection.At;
@@ -44,13 +43,11 @@ public abstract class LevelRendererMixin {
         if (cloudColor != null) {
             cloudColor.set(color.x, color.y, color.z, color.w);
         }
-
         Uniform fogColor = shader.getUniform("FogColor");
         if (fogColor != null) {
             Vec3 sky = level.getSkyColor(minecraft.gameRenderer.getMainCamera().getPosition(), partialTick);
             fogColor.set((float) sky.x, (float) sky.y, (float) sky.z, 1F);
         }
-
         Uniform fogStart = shader.getUniform("FogStart");
         if (fogStart != null) {
             int chunks = minecraft.options.renderDistance().get();
@@ -58,7 +55,6 @@ public abstract class LevelRendererMixin {
             float renderRadius = Math.min(radius, chunks * 16.0F);
             fogStart.set(renderRadius * 0.10F);
         }
-
         Uniform fogEnd = shader.getUniform("FogEnd");
         if (fogEnd != null) {
             int chunks = minecraft.options.renderDistance().get();
@@ -66,7 +62,6 @@ public abstract class LevelRendererMixin {
             float renderRadius = Math.min(radius, chunks * 16.0F);
             fogEnd.set(renderRadius * 0.45F);
         }
-
         Uniform sunDirection = shader.getUniform("sunDirection");
         if (sunDirection != null && level != null) {
             float angle = level.getSunAngle(partialTick);
@@ -75,13 +70,17 @@ public abstract class LevelRendererMixin {
     }
 
     @Unique
-    private void renderCloudLayer(PoseStack poseStack, Matrix4f projectionMatrix, ShaderInstance shader, int layer, float forecast, Vector4f color, float windX, float windZ, float height, float partialTick) {
+    private void renderCloudLayer(PoseStack poseStack, Matrix4f projectionMatrix, ShaderInstance shader, int layer, float forecast, Vector4f color, float uvX, float uvZ, float height, float partialTick) {
         ResourceLocation texture = Barometry.getCloudTexture(forecast, layer);
         Minecraft.getInstance().getTextureManager().getTexture(texture).setFilter(false, false);
         RenderSystem.setShaderTexture(0, texture);
+        Uniform uvOffset = shader.getUniform("uvOffset");
+        if (uvOffset != null) {
+            uvOffset.set((uvX % 256F) / 256F, (uvZ % 256F) / 256F);
+        }
         setupCloudShader(shader, color, partialTick);
         poseStack.pushPose();
-        poseStack.translate(windX, height, windZ);
+        poseStack.translate(0, height, 0);
         if (cloudBuffer == null) {
             poseStack.popPose();
             return;
@@ -96,40 +95,20 @@ public abstract class LevelRendererMixin {
         if (level == null) return;
         float cloudHeight = level.effects().getCloudHeight();
         if (Float.isNaN(cloudHeight)) return;
-
         Camera camera = this.minecraft.gameRenderer.getMainCamera();
-
-        FogRenderer.setupColor(
-                camera,
-                partialTick,
-                this.level,
-                this.minecraft.options.renderDistance().get(),
-                0.0F
-        );
-
-        FogRenderer.setupFog(
-                camera,
-                FogRenderer.FogMode.FOG_SKY,
-                10000.0F,
-                true,
-                partialTick
-        );
-
+        FogRenderer.setupColor(camera, partialTick, this.level, this.minecraft.options.renderDistance().get(), 0.0F);
         if (cloudBuffer == null) {
             cloudBuffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
             cloudBuffer.bind();
             cloudBuffer.upload(buildClouds(Tesselator.getInstance()));
             VertexBuffer.unbind();
         }
-
         poseStack.pushPose();
         poseStack.mulPose(frustumMatrix);
         poseStack.scale(12F, 1F, 12F);
-        poseStack.translate(-camX / 12D, cloudHeight - camY, -camZ / 12D);
-
+        poseStack.translate(0, cloudHeight - camY, 0);
         RenderType renderType = RenderType.clouds();
         renderType.setupRenderState();
-
         ShaderInstance shader = RenderSystem.getShader();
         if (shader == null) {
             renderType.clearRenderState();
@@ -139,23 +118,21 @@ public abstract class LevelRendererMixin {
         float cloudDistance = 10000F;
         Matrix4f farPlane = ((ProjectionGetter) minecraft.gameRenderer).getProjectionMatrix(cloudDistance, partialTick);
         Vector4f color = Barometry.getCloudColor(level, partialTick);
-
         float forecast = level.getRainLevel(partialTick) + level.getThunderLevel(partialTick);
         float wind = (float) (cloudOffsetPrev + (cloudOffset - cloudOffsetPrev) * partialTick);
-        float speedX = 0F;
-        float speedZ = wind * 0.09F;
-
+        float speedX = (float)(camX / 12D + wind * 0.01F);
+        float speedZ = (float)(camZ / 12D);
         float darkness = 1F - forecast * 0.25F;
         color.mul(darkness, darkness, darkness, 1F);
         renderCloudLayer(poseStack, farPlane, shader, 3, forecast, color, speedX, speedZ, 12, partialTick);
         renderCloudLayer(poseStack, farPlane, shader, 2, forecast, color, speedX, speedZ, 6, partialTick);
         renderCloudLayer(poseStack, farPlane, shader, 1, forecast, color, speedX, speedZ, 0, partialTick);
         renderCloudLayer(poseStack, farPlane, shader, 0, forecast, color, speedX, speedZ, -6, partialTick);
-
         renderType.clearRenderState();
         VertexBuffer.unbind();
         poseStack.popPose();
     }
+
     @Inject(method = "tick", at = @At("HEAD"))
     private void updateClouds(CallbackInfo ci) {
         if (level == null) return;
