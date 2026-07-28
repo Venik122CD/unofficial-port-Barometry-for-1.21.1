@@ -106,22 +106,4 @@ public class Barometry {
 
         return new Vector4f(r, g, b, 0.8F);
     }
-
-    @EventBusSubscriber(modid = Barometry.MOD_ID)
-    public static class ResourcePackHandler {
-        @SubscribeEvent
-        public static void onAddPackFinders(AddPackFindersEvent event) {
-            if (event.getPackType() != PackType.CLIENT_RESOURCES) {
-                return;
-            }
-            event.addPackFinders(
-                    ResourceLocation.fromNamespaceAndPath(Barometry.MOD_ID, "shader_patch"),
-                    PackType.CLIENT_RESOURCES,
-                    Component.literal("Barometry Shader Patch"),
-                    PackSource.BUILT_IN,
-                    false,
-                    Pack.Position.TOP
-            );
-        }
-    }
 }
