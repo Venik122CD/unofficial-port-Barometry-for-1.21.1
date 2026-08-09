@@ -10,6 +10,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.*;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
@@ -93,6 +94,8 @@ public abstract class LevelRendererMixin {
     @Overwrite
     public void renderClouds(PoseStack poseStack, Matrix4f frustumMatrix, Matrix4f projectionMatrix, float partialTick, double camX, double camY, double camZ) {
         if (level == null) return;
+        if (minecraft.player != null && minecraft.player.isEyeInFluid(FluidTags.WATER)) {
+            return;}
         float cloudHeight = level.effects().getCloudHeight();
         if (Float.isNaN(cloudHeight)) return;
         Camera camera = this.minecraft.gameRenderer.getMainCamera();
