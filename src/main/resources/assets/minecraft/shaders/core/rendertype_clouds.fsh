@@ -9,9 +9,6 @@ uniform float FogStart;
 uniform float FogEnd;
 uniform vec4 FogColor;
 
-uniform vec2 uvOffset;
-uniform vec4 cloudColor;
-
 in vec2 texCoord0;
 in float vertexDistance;
 in vec4 vertexColor;
@@ -19,17 +16,9 @@ in vec4 vertexColor;
 out vec4 fragColor;
 
 void main() {
-    vec4 color = texture(Sampler0, texCoord0 + uvOffset)
-               * cloudColor
-               * ColorModulator;
-    if (color.a < 0.01)
+    vec4 color = texture(Sampler0, texCoord0) * vertexColor * ColorModulator;
+    if (color.a < 0.1) {
         discard;
-
-    fragColor = linear_fog(
-        color,
-        vertexDistance,
-        FogStart * 0.025,
-        FogEnd,
-        FogColor
-    );
+    }
+    fragColor = linear_fog(color, vertexDistance, FogStart, FogEnd, FogColor);
 }
