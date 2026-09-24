@@ -20,6 +20,6 @@ void main() {
     gl_Position = ProjMat * pos;
 
     texCoord0 = UV0;
-    vertexDistance = length(Position.xz);
+    vertexDistance = fog_distance(pos.xyz, FogShape);
     vertexColor = Color;
 }
