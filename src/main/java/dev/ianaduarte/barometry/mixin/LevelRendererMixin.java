@@ -1,173 +1,184 @@
 package dev.ianaduarte.barometry.mixin;
 
-import com.mojang.blaze3d.shaders.Uniform;
 import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.vertex.*;
+import com.mojang.blaze3d.vertex.BufferBuilder;
+import com.mojang.blaze3d.vertex.DefaultVertexFormat;
+import com.mojang.blaze3d.vertex.MeshData;
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.Tesselator;
+import com.mojang.blaze3d.vertex.VertexBuffer;
+import com.mojang.blaze3d.vertex.VertexFormat;
 import dev.ianaduarte.barometry.Barometry;
 import dev.ianaduarte.barometry.ProjectionGetter;
-import net.minecraft.client.Camera;
+import net.minecraft.client.CloudStatus;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
-import net.minecraft.client.renderer.*;
+import net.minecraft.client.renderer.FogRenderer;
+import net.minecraft.client.renderer.LevelRenderer;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.ShaderInstance;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
-import net.minecraft.world.phys.Vec3;
-import org.jetbrains.annotations.Nullable;
 import org.joml.Matrix4f;
-import org.joml.Vector4f;
-import org.spongepowered.asm.mixin.*;
+import org.spongepowered.asm.mixin.Final;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-@SuppressWarnings("DataFlowIssue")
-@Mixin(LevelRenderer.class)
+import javax.annotation.Nullable;
+
+@Mixin(value = LevelRenderer.class, priority = 500)
 public abstract class LevelRendererMixin {
-    @Shadow
-    @Nullable
+
+    @Shadow @Nullable
     private ClientLevel level;
-    @Shadow
-    @Nullable
-    private VertexBuffer cloudBuffer;
-    @Shadow
-    @Final
+
+    @Shadow @Final
     private Minecraft minecraft;
-    @Unique
-    private double cloudOffsetPrev;
-    @Unique
-    private double cloudOffset;
 
     @Unique
-    private void setupCloudShader(ShaderInstance shader, Vector4f color, float partialTick) {
-        Uniform cloudColor = shader.getUniform("cloudColor");
-        if (cloudColor != null) {
-            cloudColor.set(color.x, color.y, color.z, color.w);
-        }
-        Uniform fogColor = shader.getUniform("FogColor");
-        if (fogColor != null) {
-            Vec3 sky = level.getSkyColor(minecraft.gameRenderer.getMainCamera().getPosition(), partialTick);
-            fogColor.set((float) sky.x, (float) sky.y, (float) sky.z, 1F);
-        }
-        Uniform fogStart = shader.getUniform("FogStart");
-        if (fogStart != null) {
-            int chunks = minecraft.options.renderDistance().get();
-            float radius = 256.0F * 12.0F;
-            float renderRadius = Math.min(radius, chunks * 16.0F);
-            fogStart.set(renderRadius * 0.10F);
-        }
-        Uniform fogEnd = shader.getUniform("FogEnd");
-        if (fogEnd != null) {
-            int chunks = minecraft.options.renderDistance().get();
-            float radius = 256.0F * 12.0F;
-            float renderRadius = Math.min(radius, chunks * 16.0F);
-            fogEnd.set(renderRadius * 0.45F);
-        }
-        Uniform sunDirection = shader.getUniform("sunDirection");
-        if (sunDirection != null && level != null) {
-            float angle = level.getSunAngle(partialTick);
-            sunDirection.set(Mth.sin(angle), 0.0F, Mth.cos(angle));
-        }
+    private double barometry$cloudPos = 0.0D;
+    @Unique
+    private double barometry$cloudStep = 0.03D;
+    @Unique @Nullable
+    private VertexBuffer barometry$cloudMesh;
+
+    @Inject(method = "tick", at = @At("HEAD"))
+    private void barometry$tickCloudOffset(CallbackInfo ci) {
+        barometry$cloudStep = 0.03D * barometry$weatherSpeed();
+        barometry$cloudPos += barometry$cloudStep;
+    }
+
+    @Inject(method = "setLevel", at = @At("TAIL"))
+    private void barometry$resetCloudState(@Nullable ClientLevel newLevel, CallbackInfo ci) {
+        barometry$cloudPos = 0.0D;
+        barometry$cloudStep = 0.03D;
     }
 
     @Unique
-    private void renderCloudLayer(PoseStack poseStack, Matrix4f projectionMatrix, ShaderInstance shader, int layer, float forecast, Vector4f color, float uvX, float uvZ, float height, float partialTick) {
-        ResourceLocation texture = Barometry.getCloudTexture(forecast, layer);
-        Minecraft.getInstance().getTextureManager().getTexture(texture).setFilter(false, false);
-        RenderSystem.setShaderTexture(0, texture);
-        Uniform uvOffset = shader.getUniform("uvOffset");
-        if (uvOffset != null) {
-            uvOffset.set((uvX % 256F) / 256F, (uvZ % 256F) / 256F);
+    private float barometry$weatherSpeed() {
+        if (level == null) {
+            return 1.0F;
         }
-        setupCloudShader(shader, color, partialTick);
-        poseStack.pushPose();
-        poseStack.translate(0, height, 0);
-        if (cloudBuffer == null) {
-            poseStack.popPose();
+        float forecast = level.getRainLevel(1.0F) + level.getThunderLevel(1.0F);
+        return Barometry.gradient(forecast / 2.0F, 0.5F, 1.5F, 2.5F);
+    }
+
+    @Inject(method = "renderClouds", at = @At("HEAD"), cancellable = true)
+    private void barometry$renderClouds(
+            PoseStack poseStack,
+            Matrix4f frustumMatrix,
+            Matrix4f projectionMatrix,
+            float partialTick,
+            double camX,
+            double camY,
+            double camZ,
+            CallbackInfo ci
+    ) {
+        ci.cancel();
+
+        ClientLevel lvl = this.level;
+        if (lvl == null || minecraft.player == null) {
             return;
         }
-        cloudBuffer.bind();
-        cloudBuffer.drawWithShader(poseStack.last().pose(), projectionMatrix, shader);
-        poseStack.popPose();
-    }
-
-    @Overwrite
-    public void renderClouds(PoseStack poseStack, Matrix4f frustumMatrix, Matrix4f projectionMatrix, float partialTick, double camX, double camY, double camZ) {
-        if (level == null) return;
-        if (minecraft.player != null && minecraft.player.isEyeInFluid(FluidTags.WATER)) {
-            return;}
-        float cloudHeight = level.effects().getCloudHeight();
-        if (Float.isNaN(cloudHeight)) return;
-        Camera camera = this.minecraft.gameRenderer.getMainCamera();
-        FogRenderer.setupColor(camera, partialTick, this.level, this.minecraft.options.renderDistance().get(), 0.0F);
-        if (cloudBuffer == null) {
-            cloudBuffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
-            cloudBuffer.bind();
-            cloudBuffer.upload(buildClouds(Tesselator.getInstance()));
-            VertexBuffer.unbind();
+        if (minecraft.player.isEyeInFluid(FluidTags.WATER)) {
+            return;
         }
+
+        CloudStatus option = minecraft.options.getCloudsType();
+        float cloudHeight = lvl.effects().getCloudHeight();
+        if (option == CloudStatus.OFF || Float.isNaN(cloudHeight)) {
+            return;
+        }
+
+        final float radius = 512.0F;
+
+        double cloudOffset = barometry$cloudPos + barometry$cloudStep * partialTick;
+        double d2 = (camX + cloudOffset) / 12.0D;
+        double d3 = (double) (cloudHeight - (float) camY + 0.33F);
+        double d4 = camZ / 12.0D + 0.33F;
+        d2 -= (double) (Mth.floor(d2 / 2048.0D) * 2048);
+        d4 -= (double) (Mth.floor(d4 / 2048.0D) * 2048);
+
+        float fx = (float) (d2 - (double) Mth.floor(d2));
+        float fz = (float) (d4 - (double) Mth.floor(d4));
+
+        FogRenderer.levelFogColor();
+        float[] fog = RenderSystem.getShaderFogColor();
+        float red = fog[0];
+        float green = fog[1];
+        float blue = fog[2];
+
+        final float texel = 1.0F / 256.0F;
+        float uCenter = (float) Mth.floor(d2) * texel;
+        float vCenter = (float) Mth.floor(d4) * texel;
+        float uMin = uCenter - radius * texel;
+        float uMax = uCenter + radius * texel;
+        float vMin = vCenter - radius * texel;
+        float vMax = vCenter + radius * texel;
+        float y = (float) d3;
+
+        BufferBuilder builder = Tesselator.getInstance()
+                .begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR_NORMAL);
+        builder.addVertex(-radius, y, radius).setUv(uMin, vMax).setColor(red, green, blue, 0.8F).setNormal(0.0F, -1.0F, 0.0F);
+        builder.addVertex(radius, y, radius).setUv(uMax, vMax).setColor(red, green, blue, 0.8F).setNormal(0.0F, -1.0F, 0.0F);
+        builder.addVertex(radius, y, -radius).setUv(uMax, vMin).setColor(red, green, blue, 0.8F).setNormal(0.0F, -1.0F, 0.0F);
+        builder.addVertex(-radius, y, -radius).setUv(uMin, vMin).setColor(red, green, blue, 0.8F).setNormal(0.0F, -1.0F, 0.0F);
+        MeshData mesh = builder.buildOrThrow();
+
+        if (barometry$cloudMesh == null) {
+            barometry$cloudMesh = new VertexBuffer(VertexBuffer.Usage.DYNAMIC);
+        }
+        barometry$cloudMesh.bind();
+        barometry$cloudMesh.upload(mesh);
+        VertexBuffer.unbind();
+
         poseStack.pushPose();
         poseStack.mulPose(frustumMatrix);
-        poseStack.scale(12F, 1F, 12F);
-        poseStack.translate(0, cloudHeight - camY, 0);
+        poseStack.scale(12.0F, 1.0F, 12.0F);
+        poseStack.translate(-fx, 0.0F, -fz);
+        Matrix4f baseMatrix = poseStack.last().pose();
+
+        float forecast = lvl.getRainLevel(partialTick) + lvl.getThunderLevel(partialTick);
+
+        int[] layers = {3, 2, 1, 0};
+        float[] heights = {12.0F, 6.0F, 0.0F, -6.0F};
+
+
         RenderType renderType = RenderType.clouds();
         renderType.setupRenderState();
+        RenderSystem.disableCull();
+
         ShaderInstance shader = RenderSystem.getShader();
         if (shader == null) {
             renderType.clearRenderState();
             poseStack.popPose();
             return;
         }
-        float cloudDistance = 10000F;
-        Matrix4f farPlane = ((ProjectionGetter) minecraft.gameRenderer).getProjectionMatrix(cloudDistance, partialTick);
-        Vector4f color = Barometry.getCloudColor(level, partialTick);
-        float forecast = level.getRainLevel(partialTick) + level.getThunderLevel(partialTick);
-        float wind = (float) (cloudOffsetPrev + (cloudOffset - cloudOffsetPrev) * partialTick);
-        float speedX = (float)(camX / 12D + wind * 0.01F);
-        float speedZ = (float)(camZ / 12D);
-        float darkness = 1F - forecast * 0.25F;
-        color.mul(darkness, darkness, darkness, 1F);
-        renderCloudLayer(poseStack, farPlane, shader, 3, forecast, color, speedX, speedZ, 12, partialTick);
-        renderCloudLayer(poseStack, farPlane, shader, 2, forecast, color, speedX, speedZ, 6, partialTick);
-        renderCloudLayer(poseStack, farPlane, shader, 1, forecast, color, speedX, speedZ, 0, partialTick);
-        renderCloudLayer(poseStack, farPlane, shader, 0, forecast, color, speedX, speedZ, -6, partialTick);
-        renderType.clearRenderState();
-        VertexBuffer.unbind();
-        poseStack.popPose();
-    }
+        Matrix4f extendedProjection =
+                ((ProjectionGetter) minecraft.gameRenderer)
+                        .getProjectionMatrix(
+                                10000.0F,
+                                partialTick
+                        );
 
-    @Inject(method = "tick", at = @At("HEAD"))
-    private void updateClouds(CallbackInfo ci) {
-        if (level == null) return;
-        float forecast = level.getRainLevel(1) + level.getThunderLevel(1);
-        float speed = Barometry.gradient(forecast / 2F, 0.5F, 1.5F, 2.5F);
-        cloudOffsetPrev = cloudOffset;
-        cloudOffset += speed * 0.065F;
-    }
+        barometry$cloudMesh.bind();
+        for (int i = 0; i < layers.length; i++) {
+            ResourceLocation texture = Barometry.getCloudTexture(forecast, layers[i]);
+            minecraft.getTextureManager().getTexture(texture).setFilter(false, false);
+            RenderSystem.setShaderTexture(0, texture);
 
-    @Unique
-    private MeshData buildClouds(Tesselator tesselator) {
-        BufferBuilder builder = tesselator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX_COLOR_NORMAL);
-        final int GRID = 128;
-        final float SIZE = 512.0F;
-        final float HALF = SIZE / 2.0F;
-        final float STEP = SIZE / GRID;
-        for (int x = 0; x < GRID; x++) {
-            float x0 = -HALF + x * STEP;
-            float x1 = x0 + STEP;
-            float u0 = x0 / HALF;
-            float u1 = x1 / HALF;
-            for (int z = 0; z < GRID; z++) {
-                float z0 = -HALF + z * STEP;
-                float z1 = z0 + STEP;
-                float v0 = z0 / HALF;
-                float v1 = z1 / HALF;
-                builder.addVertex(x0, 0, z1).setUv(u0, v1).setColor(255, 255, 255, 255).setNormal(0, -1, 0);
-                builder.addVertex(x1, 0, z1).setUv(u1, v1).setColor(255, 255, 255, 255).setNormal(0, -1, 0);
-                builder.addVertex(x1, 0, z0).setUv(u1, v0).setColor(255, 255, 255, 255).setNormal(0, -1, 0);
-                builder.addVertex(x0, 0, z0).setUv(u0, v0).setColor(255, 255, 255, 255).setNormal(0, -1, 0);
-            }
+            Matrix4f layerMatrix = new Matrix4f(baseMatrix).translate(0.0F, heights[i], 0.0F);
+            barometry$cloudMesh.drawWithShader(layerMatrix, extendedProjection, shader);
         }
-        return builder.build();
+        VertexBuffer.unbind();
+
+        renderType.clearRenderState();
+
+        poseStack.popPose();
     }
 }
